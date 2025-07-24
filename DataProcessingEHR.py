@@ -71,89 +71,88 @@ def load_mimic3_data(mimic_3data, nrows):
             'prescriptions_items': data_dicts['prescriptions'].get(hadm_id, []),
             'procedure_items': data_dicts['procedure_events'].get(hadm_id, [])
         }
-        # only include the HADM_ID if all categories have non-empty lists
-        # Original strict version
-        if all(len(items) > 0 for items in current_dict.values()):
-            merged_dict[hadm_id] = current_dict
-
-        # Try relaxed optionally:
+        # at least one item in the lists
         if any(len(items) > 0 for items in current_dict.values()):
             merged_dict[hadm_id] = current_dict
 
     return merged_dict
 
+# loads the dict
 result = load_mimic3_data(mimic_data_dir, nrows=1000)
 
-# 1. Build vocab from merged_dict
+# build vocab from merged_dict
 def build_vocab(merged_dict):
     all_codes = []
     for hadm_data in merged_dict.values():
         for cat in ['chart_items', 'input_items', 'lab_items',
                     'microbiology_items', 'prescriptions_items', 'procedure_items']:
+            # adds string version of all codes from that category into all_codes
             all_codes.extend(str(code) for code in hadm_data[cat])
 
+    # counts occurrence of each unique code
     counter = Counter(all_codes)
     vocab = {
-        "<PAD>": 0,
-        "<UNK>": 1,
-        "<BOS>": 2,
-        "<EOS>": 3
+        "<PAD>": 0, # padding
+        "<UNK>": 1, # unknown token
+        "<BOS>": 2, # beginning of sentence
+        "<EOS>": 3  # end of sentence
     }
-    # Offset existing indices by 4
+    # offset existing indices by 4
     for idx, code in enumerate(counter):
+        # 0-3 are reserved for special tokens; start index at 4
         vocab[code] = idx + 4
     return vocab
 
-print(f"Loaded {len(result)} patient admissions from MIMIC-III")
-print(f"\nTotal merged HADM IDs: {len(result)}")
+# show how many hadm_ids were merged/logged
+print(f"\nTotal HADM IDs: {len(result)}")
 
 # Prepare sequences as (encoder_input, decoder_target)
-def build_encoder_decoder_sequences(merged_dict, vocab, max_len=128):
-    examples = []
+def build_encoder_decoder_sequences(merged_dict, vocab):
+    encoded_sequences = []
+    # iterates over each hadm_id and its data
     for hadm_id, data in merged_dict.items():
         token_list = []
 
-        # Merge all categories chronologically (flat event sequence)
+        # turns the items from each category into strings
         for cat in ['chart_items', 'input_items', 'lab_items',
                     'microbiology_items', 'prescriptions_items', 'procedure_items']:
             token_list.extend(str(code) for code in data[cat])
 
-        # basic cleanup
+        # has to have at least three tokens - less than 3 is too short to work with
         if len(token_list) < 3:
             continue
 
         print(f"HADM_ID {hadm_id}: Total merged events = {len(token_list)}")
 
-        # Map to vocab indexes
+        # converts each event code to its integer vocab index; if code isn't in vocab, use index for 'UNK'
         token_ids = [vocab.get(code, vocab['<UNK>']) for code in token_list]
 
-        # Truncate to max_len - 2 for BOS/EOS
-        token_ids = token_ids[:max_len - 2]
-
         # Create encoder and decoder sequences
-        encoder_input = token_ids[:-1]  # e.g., [A B C]
-        decoder_target = token_ids[1:]  # e.g., [B C D]
-        decoder_input = [vocab['<BOS>']] + decoder_target  # [<BOS> B C]
-        decoder_output = decoder_target + [vocab['<EOS>']]  # [B C D <EOS>]
+        encoder_input = token_ids[:-1]  # e.g., [A B C] leave last to be predicted
+        decoder_target = token_ids[1:]  # e.g., [B C D] gives the last one that should be predicted
+        decoder_input = [vocab['<BOS>']] + decoder_target  # [<BOS> B C] signals start index for decoding
+        decoder_output = decoder_target + [vocab['<EOS>']]  # [B C D <EOS>] signals where decoded sequence should end
 
-        examples.append((hadm_id, encoder_input, decoder_input, decoder_output))
+        encoded_sequences.append((hadm_id, encoder_input, decoder_input, decoder_output))
 
-    return examples
+    return encoded_sequences
 
-# build vocab
+# build vocab from result data dict
 vocab = build_vocab(result)
 
-# build encoder-decoder sequences
-examples = build_encoder_decoder_sequences(result, vocab, max_len=128)
+# build encoder-decoder sequences, use all tokens
+encoded_sequences = build_encoder_decoder_sequences(result, vocab)
 
 # reverse vocab for decoding indices back to tokens
 idx2token = {idx: token for token, idx in vocab.items()}
 
-# print first few examples for inspection
-if examples:
+# check if any encoded sequences were generated
+if encoded_sequences:
     print("\n===== Sample Encoder-Decoder Sequences =====\n")
-    for i, (hadm_id, enc, dec_in, dec_out) in enumerate(examples[:5]):
-        print(f"[Example {i + 1}] HADM_ID: {hadm_id}")
+    # loops over how many tuples
+    for i, (hadm_id, enc, dec_in, dec_out) in enumerate(encoded_sequences[:10]):
+        # print out information for verification 
+        print(f"[HADM_ID {i + 1}] HADM_ID: {hadm_id}")
         print("Encoder input:     ", enc)
         print("Decoder input:     ", dec_in)
         print("Decoder target:    ", dec_out)
