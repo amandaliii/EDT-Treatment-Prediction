@@ -10,6 +10,8 @@ import torch.nn as nn
 import random
 # stores and exports predictions into Excel file
 import pandas as pd
+# to calculate precision, recall, and f1 score
+from sklearn.metrics import precision_score, recall_score, f1_score
 
 # load dataset from dataprocessing
 mimic_data_dir = "/Users/amandali/Downloads/Mimic III"
@@ -34,7 +36,9 @@ def build_vocab(sequences):
     item_counts = Counter()
     for seq in sequences:
         item_counts.update(seq)
-    vocab = ['<PAD>', '<UNK>'] + [item for item, _ in item_counts.most_common()]
+    # add special tokens at start
+    special_tokens = ['<PAD>', '<UNK>', '<BOS>', '<EOS>']
+    vocab = special_tokens + [item for item, _ in item_counts.most_common()]
     item2idx = {item: i for i, item in enumerate(vocab)}
     idx2item = {i: item for item, i in item2idx.items()}
     # returns the mapping of item to index and index to item
@@ -63,13 +67,8 @@ class EncoderDecoderDataset(Dataset):
         self.item2idx = item2idx
         self.pad_idx = item2idx['<PAD>']
         self.unk_idx = item2idx['<UNK>']
-        self.bos_idx = item2idx.get('<BOS>', len(item2idx))
-        self.eos_idx = item2idx.get('<EOS>', len(item2idx) + 1)
-
-        if '<BOS>' not in item2idx:
-            self.item2idx['<BOS>'] = self.bos_idx
-        if '<EOS>' not in item2idx:
-            self.item2idx['<EOS>'] = self.eos_idx
+        self.bos_idx = item2idx['<BOS>']
+        self.eos_idx = item2idx['<EOS>']
 
         for seq in sequences:
             # Convert to indices
@@ -169,6 +168,10 @@ def predict_next(model, input_seq, item2idx, idx2item, max_len=None):
     with torch.no_grad():
         logits = model(src, tgt_in)  # (1, 1, vocab_size)
         pred_id = logits[0, -1].argmax(dim=-1).item()
+        if pred_id not in idx2item:
+            # catch out of vocab keys
+            print(f"Warning: pred_id {pred_id} not found in idx2item, returning <UNK>")
+            return '<UNK>'
         return idx2item[pred_id]
 
 # still use a single vocabulary for all categories
@@ -242,15 +245,35 @@ for run in range(1, NUM_RUNS + 1):
             print(f"    Category: {category} → Predicting next item from sequence of length {len(items)}...")
             if len(items) < 2:
                 continue
-            input_seq = items[:]
+            input_seq = items[:-1] # all except last, for prediction
+            true_next = items[-1] # the actual next item
             predicted_next = predict_next(model, items, item2idx, idx2item, max_len=cfg_max_len)
             prediction_rows.append({
                 "Run": run,
                 "HADM_ID": hadm_id,
                 "Category": category,
-                "Input_Sequence": ", ".join(map(str, input_seq)),
-                "Predicted_Next_Item": predicted_next
+                "Input Sequence": ", ".join(map(str, input_seq)),
+                "True Next Item": true_next,
+                "Predicted Next Item": predicted_next
             })
+
+# After prediction_rows is populated
+y_true = [row["True Next Item"] for row in prediction_rows]
+# list of labels/items predicted
+y_pred = [row["Predicted Next Item"] for row in prediction_rows]
+
+# convert to numeric indices using item2idx to handle categorical items
+y_true_idx = [item2idx.get(i, item2idx['<UNK>']) for i in y_true]
+y_pred_idx = [item2idx.get(i, item2idx['<UNK>']) for i in y_pred]
+print("Unique labels in true:", set(y_true_idx))
+print("Unique labels in pred:", set(y_pred_idx))
+
+# average macro done so metrics are calculated for each class individually, then average is taken across all classes weighted equally
+# zero divisions = 0 so that when the metric in undefined, it assigns 0 instead of a warning
+precision = precision_score(y_true_idx, y_pred_idx, average="macro", zero_division=0)
+recall = recall_score(y_true_idx, y_pred_idx, average="macro", zero_division=0)
+f1 = f1_score(y_true_idx, y_pred_idx, average="macro", zero_division=0)
+print(f"Precision={precision:.4f}, Recall={recall:.4f}, F1={f1:.4f}")
 
 # how many HADM_IDs are being used
 unique_ids = set([row["HADM_ID"] for row in prediction_rows])
