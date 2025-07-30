@@ -19,7 +19,7 @@ from sklearn.model_selection import train_test_split
 # load dataset from dataprocessing
 mimic_data_dir = "/Users/amandali/Downloads/Mimic III"
 # loads how many rows of mimic 3 data
-result = load_mimic3_data(mimic_data_dir, nrows=500000)
+result = load_mimic3_data(mimic_data_dir, nrows=1000000)
 
 # flatten all sequences across all HADM_IDs into one list of category sequences
 def extract_sequences_with_hadm_ids(data):
@@ -187,6 +187,9 @@ def predict_next(model, input_seq, item2idx, idx2item, max_len=None):
     if max_len is None:
         max_len = len(input_ids)
 
+    print(f"Example vocab tokens: {[idx2item[i] for i in range(min(10, len(idx2item)))]}")
+    print(f"Predicted IDs range: {min(idx2item.keys())}-{max(idx2item.keys())}")
+
     input_ids = input_ids[-max_len:]
     if len(input_ids) < max_len:
         input_ids = [item2idx['<PAD>']] * (max_len - len(input_ids)) + input_ids
@@ -204,7 +207,8 @@ def predict_next(model, input_seq, item2idx, idx2item, max_len=None):
             # catch out of vocab keys
             print(f"Warning: pred_id {pred_id} not found in idx2item, returning <UNK>")
             return '<UNK>'
-        return idx2item[pred_id]
+        token = idx2item.get(pred_id, '<UNK>')
+        return str(token)
 
 # still use a single vocabulary for all categories
 # tuple of sequences, unmodifiable
@@ -265,7 +269,7 @@ for run in range(1, NUM_RUNS + 1):
         embed_dim=64,
         max_len=cfg_max_len + 2  # +2 for BOS/EOS or any extra special tokens
     )
-    epoch_losses = train_model(model, train_loader, val_loader, epochs=7)
+    epoch_losses = train_model(model, train_loader, val_loader, epochs=15)
     for epoch_loss in epoch_losses:
         epoch_loss.update({"Run": run})
         epoch_tracking.append(epoch_loss)
@@ -291,7 +295,8 @@ for run in range(1, NUM_RUNS + 1):
                 continue
             input_seq = items[:-1] # all except last, for prediction
             true_next = items[-1] # the actual next item
-            predicted_next = predict_next(model, items, item2idx, idx2item, max_len=cfg_max_len)
+            predicted_next = predict_next(model, input_seq, item2idx, idx2item, max_len=128)
+            print(f"Predicted next item token: {predicted_next} (type: {type(predicted_next)})")
             prediction_rows.append({
                 "Run": run,
                 "HADM_ID": hadm_id,
