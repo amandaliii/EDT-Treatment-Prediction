@@ -6,19 +6,22 @@ from collections import Counter
 import torch
 from torch.utils.data import Dataset, DataLoader
 import torch.nn as nn
+from torch.utils.data import random_split
 # used for shuffling
 import random
 # stores and exports predictions into Excel file
 import pandas as pd
 # to calculate precision, recall, and f1 score
 from sklearn.metrics import precision_score, recall_score, f1_score
+# for validation loss/metrics
+from sklearn.model_selection import train_test_split
 
 # load dataset from dataprocessing
 mimic_data_dir = "/Users/amandali/Downloads/Mimic III"
 # loads how many rows of mimic 3 data
-result = load_mimic3_data(mimic_data_dir, nrows=100000)
+result = load_mimic3_data(mimic_data_dir, nrows=500000)
 
-# Flatten all sequences across all HADM_IDs into one list of category sequences
+# flatten all sequences across all HADM_IDs into one list of category sequences
 def extract_sequences_with_hadm_ids(data):
     # returns a flat list of (hadm_id, category, sequence) tuples
     sequence_list = []
@@ -37,14 +40,22 @@ def build_vocab(sequences):
     for seq in sequences:
         item_counts.update(seq)
     # add special tokens at start
+    # pad: padding token for sequence length normalization
+    # unk: unknown token for out of vocab items
+    # bos: beginning of sequence token
+    # eos: end of sentence token
     special_tokens = ['<PAD>', '<UNK>', '<BOS>', '<EOS>']
     vocab = special_tokens + [item for item, _ in item_counts.most_common()]
+    # builds two dictionaries, 1 maps tokens to unique integer indices, the other reverse mapping from indices to tokens
     item2idx = {item: i for i, item in enumerate(vocab)}
     idx2item = {i: item for item, i in item2idx.items()}
     # returns the mapping of item to index and index to item
     return item2idx, idx2item
 
+# combines individual dataset items into batches
+# pads all sequences in the batch to same legnth using pad_idx
 def collate_fn(batch, pad_idx):
+    # source sequences are padded on the left (more space on left), and target sequences are padded on the right (more space on right)
     srcs, tgt_ins, tgt_outs = zip(*batch)
     max_src = max(len(s) for s in srcs)
     max_tgt = max(len(t) for t in tgt_ins)
@@ -119,8 +130,22 @@ class EncoderDecoderTransformer(nn.Module):
         out = self.transformer(src_emb, tgt_emb, tgt_mask=tgt_mask)
         return self.output(out)
 
+# determines validation loss
+def evaluate_model(model, dataloader, loss_fn, device):
+    model.eval()
+    total_val_loss = 0
+    count = 0
+    with torch.no_grad():
+        for src, tgt_in, tgt_out in dataloader:
+            src, tgt_in, tgt_out = src.to(device), tgt_in.to(device), tgt_out.to(device)
+            output = model(src, tgt_in)
+            loss = loss_fn(output.view(-1, output.size(-1)), tgt_out.view(-1))
+            total_val_loss += loss.item() * src.size(0)
+            count += src.size(0)
+    return total_val_loss / count
+
 # train the model for epochs times
-def train_model(model, dataloader, epochs, lr=1e-3):
+def train_model(model, dataloader, val_loader, epochs, lr=1e-3):
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
     model = model.to(device)
     loss_fn = nn.CrossEntropyLoss(ignore_index=model.embedding.padding_idx)
@@ -140,9 +165,16 @@ def train_model(model, dataloader, epochs, lr=1e-3):
             loss = loss_fn(output.view(-1, output.size(-1)), tgt_out.view(-1))
             loss.backward()
             optimizer.step()
-            total_loss += loss.item()
-        print(f"Epoch {epoch+1} - Loss: {total_loss:.4f}")
-        epoch_losses.append(total_loss)
+            total_loss += loss.item() * src.size(0)
+
+        avg_train_loss = total_loss / len(train_loader.dataset)
+        avg_val_loss = evaluate_model(model, val_loader, loss_fn, device)
+        print(f"Epoch {epoch+1} - Train Loss: {avg_train_loss:.4f}, Val Loss: {avg_val_loss:.4f}")
+        epoch_losses.append({
+            "Epoch": epoch + 1,
+            "Train Loss": avg_train_loss,
+            "Val Loss": avg_val_loss
+        })
     return epoch_losses
 
 # predict the next term
@@ -191,11 +223,26 @@ item2idx, idx2item = build_vocab(all_sequences)
 dataset = EncoderDecoderDataset(all_sequences, item2idx)
 # get the index for <PAD> so we can use it in the collate function
 pad_idx = item2idx['<PAD>']
-# loads in data
-loader = DataLoader(
-    dataset,
+
+# creates training and validation datasets
+val_fraction = 0.2  # 20% validation
+total_size = len(dataset)
+val_size = int(total_size * val_fraction)
+train_size = total_size - val_size
+# splits into training and validation dataset
+train_dataset, val_dataset = random_split(dataset, [train_size, val_size])
+# training dataset
+train_loader = DataLoader(
+    train_dataset,
     batch_size=64,
-    shuffle=True,
+    shuffle=True,  # shuffle training data
+    collate_fn=lambda b: collate_fn(b, pad_idx)
+)
+# validation dataset
+val_loader = DataLoader(
+    val_dataset,
+    batch_size=64,
+    shuffle=False,  # typically no shuffle on validation data
     collate_fn=lambda b: collate_fn(b, pad_idx)
 )
 
@@ -206,7 +253,7 @@ epoch_tracking = []
 # number of hadm_id patients to show
 num_hadms = 5
 # number of prediction runs
-NUM_RUNS = 3
+NUM_RUNS = 2
 
 # run the prediction
 print("\n=== HADM_ID + Category-wise Predictions ===\n")
@@ -218,13 +265,10 @@ for run in range(1, NUM_RUNS + 1):
         embed_dim=64,
         max_len=cfg_max_len + 2  # +2 for BOS/EOS or any extra special tokens
     )
-    epoch_losses = train_model(model, loader, epochs=7)
-    for epoch_num, loss in enumerate(epoch_losses, 1):
-        epoch_tracking.append({
-            "Run": run,
-            "Epoch": epoch_num,
-            "Loss": loss
-        })
+    epoch_losses = train_model(model, train_loader, val_loader, epochs=7)
+    for epoch_loss in epoch_losses:
+        epoch_loss.update({"Run": run})
+        epoch_tracking.append(epoch_loss)
 
     # Get all unique HADM_IDs, shuffle, and pick N unique ones
     # filter HADM_IDs to only those with at least one category with ≥ 2 items
@@ -275,14 +319,23 @@ recall = recall_score(y_true_idx, y_pred_idx, average="macro", zero_division=0)
 f1 = f1_score(y_true_idx, y_pred_idx, average="macro", zero_division=0)
 print(f"Precision={precision:.4f}, Recall={recall:.4f}, F1={f1:.4f}")
 
+# split sequence beforehand
+train_seqs, val_seqs = train_test_split(all_sequences, test_size=0.2, random_state=42)
+
+train_dataset = EncoderDecoderDataset(train_seqs, item2idx)
+val_dataset = EncoderDecoderDataset(val_seqs, item2idx)
+
+train_loader = DataLoader(train_dataset, batch_size=64, shuffle=True, collate_fn=lambda b: collate_fn(b, pad_idx))
+val_loader = DataLoader(val_dataset, batch_size=64, shuffle=False, collate_fn=lambda b: collate_fn(b, pad_idx))
+
 # how many HADM_IDs are being used
 unique_ids = set([row["HADM_ID"] for row in prediction_rows])
 print(f"\nTotal unique HADM_IDs predicted across all runs: {len(unique_ids)}")
-# Save epoch loss history
+# save epoch loss history
 epoch_df = pd.DataFrame(epoch_tracking)
 epoch_df.to_excel("EDT_mimic3_epoch_losses.xlsx", index=False)
-print("Epoch losses saved to EDT_mimic3_epoch_losses.xlsx")
-# save predictions into an excel sheet
+print("Epoch data saved to EDT_mimic3_epoch_losses.xlsx")
+# save predictions
 df = pd.DataFrame(prediction_rows)
 df.to_excel("EDT_mimic3_predictions.xlsx", index=False)
 print("Predictions saved to EDT_mimic3_predictions.xlsx")
