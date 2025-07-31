@@ -33,7 +33,7 @@ def extract_sequences(data, category_key):
     sequence_list = []
     for hadm_id, category_dict in data.items():
         items = category_dict.get(category_key, [])
-        if len(items) >= 2:  # ensure sequence has at least 2 items
+        if len(items) >= 2:  # Ensure sequence has at least 2 items
             sequence_list.append((hadm_id, items))
     return sequence_list
 
@@ -69,7 +69,7 @@ class SequenceDataset(Dataset):
             input_seq = [0] * (self.max_len - len(input_seq)) + input_seq
         return torch.tensor(input_seq, dtype=torch.long), torch.tensor(target, dtype=torch.long)
 
-# decoder model
+# decoder Model
 class decoderModel(nn.Module):
     def __init__(self, vocab_size, embed_size, hidden_size):
         super(decoderModel, self).__init__()
@@ -83,7 +83,7 @@ class decoderModel(nn.Module):
         out = self.fc(h_n[-1])
         return out
 
-# evaluate model on validation set or test set
+# evaluate model on validation or test set
 def evaluate_model(model, dataloader, loss_fn, device):
     model.eval()
     total_loss = 0
@@ -105,7 +105,7 @@ def evaluate_model(model, dataloader, loss_fn, device):
     f1 = f1_score(all_targets, all_preds, average='macro', zero_division=0)
     return avg_loss, accuracy, precision, recall, f1
 
-# Train the model with train/validation split
+# train the model with train/validation split
 def train_model(model, train_loader, val_loader, epochs, lr=1e-3):
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
     model = model.to(device)
@@ -127,7 +127,7 @@ def train_model(model, train_loader, val_loader, epochs, lr=1e-3):
             total_train_loss += loss.item()
         avg_train_loss = total_train_loss / len(train_loader)
 
-        # Validation
+        # validation
         avg_val_loss, val_accuracy, val_precision, val_recall, val_f1 = evaluate_model(model, val_loader, loss_fn, device)
         metrics.append({
             "Epoch": epoch + 1,
@@ -177,11 +177,14 @@ for category, category_key in CATEGORIES.items():
     train_size = int(0.8 * len(sequence_tuples))
     val_size = int(0.15 * len(sequence_tuples))
     train_sequences = [seq for _, seq in sequence_tuples[:train_size]]
-    val_sequences = [seq for _, seq in sequence_tuples[train_size:train_size+val_size]]
+    val_sequences = [seq for _, seq in sequence_tuples[train_size:train_size + val_size]]
     test_sequences = [seq for _, seq in sequence_tuples[train_size + val_size:]]
+    train_hadm_ids = [hadm_id for hadm_id, seq in sequence_tuples[:train_size]]
+    val_hadm_ids = [hadm_id for hadm_id, seq in sequence_tuples[train_size:train_size + val_size]]
+    test_hadm_ids = [hadm_id for hadm_id, seq in sequence_tuples[train_size + val_size:]]
 
     # build vocabulary
-    item2idx, idx2item = build_vocab(train_sequences + val_sequences)
+    item2idx, idx2item = build_vocab(train_sequences + val_sequences + test_sequences)
 
     # create datasets and dataloaders
     train_dataset = SequenceDataset(train_sequences, item2idx)
@@ -200,8 +203,7 @@ for category, category_key in CATEGORIES.items():
 
     # evaluate on test set
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
-    test_loss, test_accuracy, test_precision, test_recall, test_f1 = evaluate_model(model, test_loader,
-                                                                                        nn.CrossEntropyLoss(), device)
+    test_loss, test_accuracy, test_precision, test_recall, test_f1 = evaluate_model(model, test_loader, nn.CrossEntropyLoss(), device)
     all_metrics.append({
         "Category": category,
         "Epoch": "Test",
@@ -213,34 +215,34 @@ for category, category_key in CATEGORIES.items():
         "Val_F1": test_f1
     })
     print(f"\nTest Results for {category} - Loss: {test_loss:.4f}, Accuracy: {test_accuracy:.4f}, "
-            f"Precision: {test_precision:.4f}, Recall: {test_recall:.4f}, F1: {test_f1:.4f}")
+          f"Precision: {test_precision:.4f}, Recall: {test_recall:.4f}, F1: {test_f1:.4f}")
 
-    # predict for a subset of HADM_IDs
-    valid_hadm_ids = [hadm_id for hadm_id, seq in sequence_tuples]
-    random.shuffle(valid_hadm_ids)
-    hadm_ids_to_process = valid_hadm_ids[:num_hadms]
+    # predict for a subset of HADM_IDs from each dataset split
+    for dataset_name, hadm_ids in [("Train", train_hadm_ids), ("Validation", val_hadm_ids), ("Test", test_hadm_ids)]:
+        random.shuffle(hadm_ids)
+        hadm_ids_to_process = hadm_ids[:min(num_hadms, len(hadm_ids))]
+        for run in range(1, NUM_RUNS + 1):
+            print(f"\nRun {run} {dataset_name} Set Predictions for {category}...")
+            for hadm_id in hadm_ids_to_process:
+                seq = result[hadm_id][category_key]
+                if len(seq) < 2:
+                    continue
+                # use all but the last item as input, last item as ground truth
+                input_seq = seq[:-1]
+                ground_truth = seq[-1]
+                predicted_item, is_correct = predict_next(model, input_seq, ground_truth, item2idx, idx2item)
+                all_prediction_rows.append({
+                    "Run": run,
+                    "Category": category,
+                    "HADM_ID": hadm_id,
+                    "Input_Sequence": ", ".join(map(str, input_seq)),
+                    "Ground_Truth": ground_truth,
+                    "Predicted_Next_Item": predicted_item,
+                    "Is_Correct": is_correct,
+                    "Dataset": dataset_name
+                })
 
-    for run in range(1, NUM_RUNS + 1):
-        print(f"\nRun {run} Predictions for {category}...")
-        for hadm_id in hadm_ids_to_process:
-            seq = result[hadm_id][category_key]
-            if len(seq) < 2:
-                continue
-            # use all but the last item as input, last item as ground truth
-            input_seq = seq[:-1]
-            ground_truth = seq[-1]
-            predicted_item, is_correct = predict_next(model, input_seq, ground_truth, item2idx, idx2item)
-            all_prediction_rows.append({
-                "Run": run,
-                "Category": category,
-                "HADM_ID": hadm_id,
-                "Input_Sequence": ", ".join(map(str, input_seq)),
-                "Ground_Truth": ground_truth,
-                "Predicted_Next_Item": predicted_item,
-                "Is_Correct": is_correct
-            })
-
-# save results to excel files (metrics and predictions)
+# save results to excel files
 df = pd.DataFrame(all_prediction_rows)
 df.to_excel("mimic3_all_categories_predictions.xlsx", index=False)
 print("\nPredictions saved to mimic3_all_categories_predictions.xlsx")
