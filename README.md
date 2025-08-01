@@ -1,4 +1,4 @@
-# EDT-Treatment-Prediction
+# Treatment-Prediction
 Data Processing: loads in the data and creates encoder sequences
 
 itemToLabel: creates dictionary mapping of itemID to label for categories
