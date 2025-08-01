@@ -115,7 +115,7 @@ def main():
     # dataframe of duplicates (if any found)
     df_duplicates = pd.DataFrame(duplicates)
 
-    # store mapping into excel sheet 
+    # store mapping into excel sheet
     output_file = 'filtered_item_mappings.xlsx'
     with pd.ExcelWriter(output_file, engine='openpyxl') as writer:
         df_mappings.to_excel(writer, sheet_name='Mappings', index=False)
