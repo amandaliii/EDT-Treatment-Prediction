@@ -7,12 +7,14 @@ mimic_data_dir = '/Users/amandali/Downloads/Mimic III'
 
 # mimic_3data is the directory path for the data in my local file
 def load_mimic3_data(mimic_3data, nrows):
+    # chart events: observations and measurements
+    # input events: administration of fluids, medications, or other substances
     # data dictionary mapping - file name, sort columns, and grouping column
     data_files = {
         'chart_events': ('CHARTEVENTS.csv.gz', ['HADM_ID', 'CHARTTIME'], 'ITEMID'),
         'input_events': ('INPUTEVENTS_MV.csv.gz', ['HADM_ID', 'STARTTIME'], 'ITEMID'),
         'lab_events': ('LABEVENTS.csv.gz', ['HADM_ID', 'CHARTTIME'], 'ITEMID'),
-        'microbiology_events': ('MICROBIOLOGYEVENTS.csv.gz', ['HADM_ID', 'CHARTTIME'], 'SPEC_ITEMID'),
+        'microbiology_events': ('MICROBIOLOGYEVENTS.csv.gz', ['HADM_ID', 'CHARTTIME'], 'SPEC_TYPE_DESC'),
         'prescriptions': ('PRESCRIPTIONS.csv.gz', ['HADM_ID', 'STARTDATE'], 'DRUG'),
         'procedure_events': ('PROCEDUREEVENTS_MV.csv.gz', ['HADM_ID', 'STARTTIME'], 'ITEMID'),
     }
@@ -78,7 +80,7 @@ def load_mimic3_data(mimic_3data, nrows):
     return merged_dict
 
 # loads the dict
-result = load_mimic3_data(mimic_data_dir, nrows=1000)
+result = load_mimic3_data(mimic_data_dir, nrows=1000000)
 
 # build vocab from merged_dict
 def build_vocab(merged_dict):
@@ -151,7 +153,7 @@ if encoded_sequences:
     print("\n===== Sample Encoder-Decoder Sequences =====\n")
     # loops over how many tuples
     for i, (hadm_id, enc, dec_in, dec_out) in enumerate(encoded_sequences[:10]):
-        # print out information for verification 
+        # print out information for verification
         print(f"[HADM_ID {i + 1}] HADM_ID: {hadm_id}")
         print("Encoder input:     ", enc)
         print("Decoder input:     ", dec_in)
