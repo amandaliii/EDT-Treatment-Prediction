@@ -243,8 +243,12 @@ def predict_next(model, input_seq, ground_truth, item2idx, idx2item, max_len=20,
     print(f"  Ground Truth ITEMID: {ground_truth}, Predicted ITEMID: {predicted_item}")
 
     # lookup labels from the flat mapping (fallback to 'Unknown')
-    predicted_label = itemid_label_mappings_flat.get(str(predicted_item), 'Unknown')
-    ground_truth_label = itemid_label_mappings_flat.get(str(ground_truth), 'Unknown')
+    if category in ('prescriptions', 'microbiology_events'):
+        predicted_label = predicted_item
+        ground_truth_label = ground_truth
+    else:
+        predicted_label = itemid_label_mappings_flat.get(str(predicted_item), 'Unknown')
+        ground_truth_label = itemid_label_mappings_flat.get(str(ground_truth), 'Unknown')
 
     print(f"\nPredicted ITEMID: {predicted_item}, Label: {predicted_label}")
     print(f"Ground Truth ITEMID: {ground_truth}, Label: {ground_truth_label}")
