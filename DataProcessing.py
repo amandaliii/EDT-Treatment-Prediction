@@ -163,3 +163,32 @@ if encoded_sequences:
         print("-" * 60)
 else:
     print("\nNo examples generated. Check data filtering or event length thresholds.")
+
+# convert encoded_sequences to a DataFrame
+def save_to_excel(encoded_sequences, output_file='encoded_sequences.xlsx'):
+    # prepare data for DataFrame
+    data = []
+    for hadm_id, enc, dec_in, dec_out in encoded_sequences:
+        # convert lists to strings for Excel compatibility
+        enc_str = ','.join(map(str, enc))
+        dec_in_str = ','.join(map(str, dec_in))
+        dec_out_str = ','.join(map(str, dec_out))
+        data.append({
+            'HADM_ID': hadm_id,
+            'Encoder_Input': enc_str,
+            'Decoder_Input': dec_in_str,
+            'Decoder_Output': dec_out_str
+        })
+
+    # create DataFrame
+    df = pd.DataFrame(data)
+
+    # save to Excel
+    df.to_excel(output_file, index=False, engine='openpyxl')
+    print(f"Saved encoded sequences to {output_file}")
+
+# call the function to save the sequences
+if encoded_sequences:
+    save_to_excel(encoded_sequences, output_file='encoded_sequences.xlsx')
+else:
+    print("No sequences to save to Excel.")
